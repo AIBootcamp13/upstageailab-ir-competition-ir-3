@@ -16,9 +16,11 @@
 ### Requirements
 - elasticsearch==8.8.0
 - sentence-transformers==2.2.2
+- langchain, langchain_community
+- kiwipiepy==0.16.1
+- faiss-cpu / faiss-gpu
 - openai==1.30.1 (LLM query rewriting, 옵션)
 - numpy, pandas
-- curl (Elasticsearch 연결 확인용)
 
 ## 1. Competiton Info
 
@@ -40,12 +42,11 @@ e.g.
 ```
 ├── code
 │   ├── jupyter_notebooks
-│   │   └── model_train.ipynb
-│   └── train.py
-├── docs
-│   ├── pdf
-│   │   └── (Template) [패스트캠퍼스] Upstage AI Lab 1기_그룹 스터디 .pptx
-│   └── paper
+│       └── model_train.ipynb
+│ ├── rag_with_elasticsearch.py # 초기 baseline 코드 (BM25 + Dense hybrid, RRF)
+│ ├── rag_with_elasticsearch01.py # 개선 버전 (fusion, chunking, 파라미터 실험)
+│ ├── hybrid_bm25_dense_ce.py # BM25 + Dense + Cross-Encoder reranker
+│ ├── dense_dual_ensemble.py # Dual FAISS 인덱스 앙상블 (0.1/0.9 가중치)
 └── input
     └── data
         ├── eval
@@ -66,24 +67,31 @@ e.g.
 ### Data Processing
 - Document Cleaning: 공백 정리
 - Chunking: window/stride 기반 문서 분할
-- Embedding: Sentence-BERT 기반 임베딩 추출 후 ES dense_vector로 인덱싱
-- Normalization: cosine 유사도 적용을 위해 normalize_embeddings 시도 예정
+- Embedding: SBERT 기반 임베딩 (KURE-v1 등)
+- Tokenization: Kiwi 기반 BM25 전처리
+- 후처리: 특정 query id 룰 기반 제외(greet_id 리스트), docid 중복 제거
 
 ## 4. Modeling
 
-### Model descrition
-- Dense Model: snunlp/KR-SBERT-V40K-klueNLI-augSTS (한국어 SBERT)
-- Sparse Model: Elasticsearch BM25 (nori tokenizer 기반)
-- Hybrid: RRF (Reciprocal Rank Fusion)
-- LLM(OpenAI gpt-4o-mini)은 baseline에서 query rewriting 실험용으로만 사용, 최종 리더보드는 retrieval만 반영됨
+### Model description
+- **Sparse Model**: BM25 (Kiwi tokenizer 기반)
+- **Dense Model**: HuggingFace Embeddings (`nlpai-lab/KURE-v1`)  
+  - 사용 방식: 
+    - FAISS 인덱스 1 (질문 기반 인덱싱)
+    - FAISS 인덱스 2 (semantic 기반 인덱싱)
+- **Hybrid / Fusion**:
+  - **RRF (Reciprocal Rank Fusion)**: 안정적 성능
+  - **Dual Dense 앙상블 (0.1 / 0.9)**: 두 FAISS 인덱스를 결합해 상보성 확보
+  - **BM25 + Dense 앙상블 + Cross-Encoder**: recall 확보 후 rerank로 precision 강화
+- **Cross-Encoder**: `BAAI/bge-reranker-v2-m3` (상위 후보 재정렬)
 
 ### Modeling Process
-1. Baseline: 단순 BM25 or Dense retrieval → MAP ≈ 0.33
+1. Baseline: 단일 BM25 / 단일 Dense retrieval → MAP ≈ 0.33
 2. Chunk tuning: win/stride 적용 → MAP ≈ 0.52
-3. Hybrid: RRF 결합 (dense + BM25) → 안정적으로 0.51~0.52 유지
-4. Fusion 실험: z-score weighted sum → 오히려 성능 저하
-5. 다양성 제어: same-doc limit 적용, MAP 소폭 개선
-6. 추가 예정 개선: cosine 유사도 전환, BM25 k1/b 튜닝, msm=70%
+3. Hybrid (BM25 + Dense, RRF): MAP 0.51~0.52
+4. Dual Dense 앙상블 (0.1 / 0.9): 최고 점수 근접
+5. BM25 + Dense + Cross-Encoder reranker: precision 강화, 팀 최고 점수 달성
+6. 후처리: 특정 query 제외(greet_id), 중복 제거로 noise 감소
 
 ## 5. Result
 
